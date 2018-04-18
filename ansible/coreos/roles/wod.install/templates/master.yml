@@ -1,0 +1,756 @@
+passwd:
+  users:
+    - name: "core"
+      ssh_authorized_keys:
+        {% for key in SSH_KEYS %}- "{{ key }}"
+        {% endfor %} 
+    - name: root
+      password_hash: "{{ ROOT_PWD }}"
+update:
+  group:  "stable"
+  server: "https://public.update.core-os.net/v1/update/"
+locksmith:
+  reboot_strategy: "etcd-lock"
+  window_start:    "Sun 1:00"
+  window_length:   "2h"
+  group: "{{ GROUP_NAME }}"
+storage:
+  files:
+  - filesystem: "root"
+    path: "/etc/ssh/sshd_config"
+    mode: 0600
+    contents:
+      inline: |
+        # Use most defaults for sshd configuration.
+        Subsystem sftp internal-sftp
+        ClientAliveInterval 180
+        UseDNS no
+        UsePAM yes
+        PermitRootLogin yes
+        PrintLastLog no # handled by PAM
+        PrintMotd no # handled by PAM
+  - filesystem: "root"
+    path:       "/etc/hostname"
+    mode:       0644
+    contents:
+      inline: {{ inventory_hostname }}
+  - filesystem: "root"
+    path:       "/etc/hosts"
+    mode:       0644
+    contents:
+      inline: |
+        127.0.0.1 localhost
+        127.0.0.1 {{ inventory_hostname }}
+        {% for host in HOSTS %}{{ host }}
+        {% endfor %} 
+        {% for host in groups.all %}{{ hostvars[host]['ansible_ssh_host'] }} {{ host }}
+        {% endfor %} 
+  - filesystem: "root"
+    path:       "/etc/rkt/net.d/10-containers.conf"
+    mode:       0644
+    contents:
+      inline: |
+        {
+          "name": "containers",
+          "type": "bridge",
+          "ipam": {
+            "type": "host-local",
+            "subnet": "172.17.0.0/16"
+          }
+        }
+  - filesystem: "root"
+    path:       "/etc/kubernetes/scripts/rkt-prepare.sh"
+    mode:       0755
+    contents:
+      inline: |
+        #!/bin/bash
+        set -e
+        mkdir -p /etc/kubernetes/downloads
+        curl $HTTP_SERVER/rkt-prepare.sh > /etc/kubernetes/downloads/rkt-prepare.sh
+        chmod +x /etc/kubernetes/downloads/rkt-prepare.sh
+        sed -i "s/\r//" /etc/kubernetes/downloads/rkt-prepare.sh
+        /etc/kubernetes/downloads/rkt-prepare.sh
+        echo 'rkt is ready!'
+  - filesystem: "root"
+    path:       "/etc/kubernetes/cni/10-kuberouter.conf"
+    mode:       0644
+    contents:
+      inline: |
+        {
+          "name":"kubernetes",
+          "type":"bridge",
+          "bridge":"kube-bridge",
+          "isDefaultGateway":true,
+          "hairpinMode":true,
+          "ipam": {
+            "type":"host-local"
+          }
+        }
+  - filesystem: "root"
+    path:       "/etc/kubernetes/config/haproxy.cfg"
+    mode:       0644
+    contents:
+      inline: |
+        global
+          log 127.0.0.1 local0 err
+          daemon
+          nbproc 1
+          maxconn 4096
+        defaults
+          option abortonclose
+          option tcplog
+          option tcp-check
+          balance roundrobin
+        listen kube_apiserver
+          bind *:{{ K8S_PORT }}
+          mode tcp
+          {% for host in groups["kube-master"] %}server apiserver{{ loop.index }} {{ hostvars[host]['ansible_ssh_host'] }}:65535 check inter 2000 rise 2 fall 3
+          {% endfor %} 
+  - filesystem: "root"
+    path:       "/etc/kubernetes/config/keepalived.conf"
+    mode:       0644
+    contents:
+      inline: |
+        vrrp_instance vi_kube_apiserver {
+          interface {{ NETWORK }}
+          track_interface {
+        	{{ NETWORK }}
+          }
+          state BACKUP
+          virtual_router_id {{ 100 | random }}
+          priority {{ 254 | random }}
+          nopreempt
+          virtual_ipaddress {
+        	{{ APISERVER_KEEPALIVED["IP"] }}/{{ NETMASK }}
+          }
+          authentication {
+        	auth_type PASS
+        	auth_pass {{ APISERVER_KEEPALIVED["PASSWORD"] }}
+          }
+        }
+        {% if KEEPALIVED and KEEPALIVED['INTERFACE'].strip() and KEEPALIVED['PASSWORD'].strip() and KEEPALIVED['VIRTUAL_IPS'] %} 
+        vrrp_instance vi_master {
+          interface {{ KEEPALIVED["INTERFACE"] }}
+          track_interface {
+        	{{ KEEPALIVED["INTERFACE"] }}
+          }
+          state BACKUP
+          virtual_router_id {{ 100 | random }}
+          priority {{ 254 | random }}
+          nopreempt
+          virtual_ipaddress {
+        	{% for ips in KEEPALIVED["VIRTUAL_IPS"] %}{{ ips }}/{{ KEEPALIVED["NETMASK"] }}
+            {% endfor %} 
+          }
+          authentication {
+        	auth_type PASS
+        	auth_pass {{ KEEPALIVED["PASSWORD"] }}
+          }
+        }
+        {% endif %} 
+  - filesystem: "root"
+    path:       "/etc/kubernetes/config/kubeconfig.yaml"
+    mode:       0644
+    contents:
+      inline: |
+        ---
+        apiVersion: v1
+        clusterCIDR: {{ POD_NETWORK }}
+        kind: Config
+        clusters:
+        - name: local
+          cluster:
+            server: https://{{ APISERVER_KEEPALIVED['IP'] }}:{{ K8S_PORT }}
+            certificate-authority: /etc/kubernetes/ssl/ca.pem
+        users:
+        - name: kubelet
+          user:
+            client-certificate: /etc/kubernetes/ssl/kubelet.pem
+            client-key: /etc/kubernetes/ssl/kubelet.key
+        contexts:
+        - context:
+            cluster: local
+            user: kubelet
+          name: kubelet-context
+        current-context: kubelet-context
+  - filesystem: "root"
+    path:       "/etc/kubernetes/manifests/kube-router.yaml"
+    mode:       0644
+    contents:
+      inline: |
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kube-router
+          namespace: kube-system
+        spec:
+          hostNetwork: true
+          hostIPC: true
+          hostPID: true
+          containers:
+          - name: kube-router
+            image: {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KUBE_ROUTER'] }}
+            args:
+            - --run-router=true
+            - --run-firewall=true
+            - --run-service-proxy=true
+            - --advertise-cluster-ip=true
+            - --advertise-external-ip=true
+            - --kubeconfig=/etc/kubernetes/config/kubeconfig.yaml
+            env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            resources:
+              requests:
+                cpu: 250m
+                memory: 250Mi
+            securityContext:
+              privileged: true
+            volumeMounts:
+            - name: lib-modules
+              mountPath: /lib/modules
+              readOnly: true
+            - name: cni-conf-dir
+              mountPath: /etc/cni/net.d
+            - name: run
+              mountPath: /var/run/docker.sock
+              readOnly: true
+            - name: kubeconf
+              mountPath: /etc/kubernetes/config/kubeconfig.yaml
+              readOnly: true
+            - name: kubessl
+              mountPath: /etc/kubernetes/ssl
+              readOnly: true
+          volumes:
+          - name: lib-modules
+            hostPath:
+              path: /lib/modules
+          - name: cni-conf-dir
+            hostPath:
+              path: /etc/kubernetes/cni
+          - name: run
+            hostPath:
+              path: /var/run/docker.sock
+          - name: kubeconf
+            hostPath:
+              path: /etc/kubernetes/config/kubeconfig.yaml
+          - name: kubessl
+            hostPath:
+              path: /etc/kubernetes/ssl
+  - filesystem: "root"
+    path:       "/etc/kubernetes/manifests/kube-apiserver.yaml"
+    mode:       0644
+    contents:
+      inline: |
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kube-apiserver
+          namespace: kube-system
+        spec:
+          hostNetwork: true
+          containers:
+          - name: kube-apiserver
+            image: {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KUBELET'] }}
+            command:
+            - /hyperkube
+            - apiserver
+            - --bind-address=0.0.0.0
+            - --etcd-servers={% for host in groups.etcd %}http://{{ hostvars[host]['ansible_ssh_host'] }}:2379{% if not loop.last %},{% endif %}{% endfor %} 
+            - --allow-privileged=true
+            - --service-cluster-ip-range={{ SERVICE_IP_RANGE }}
+            - --service-node-port-range={{ SERVICE_PORT_RANGE }}
+            - --secure-port=65535
+            - --advertise-address={{ ansible_ssh_host }}
+            - --admission-control=NamespaceLifecycle,LimitRanger,ServiceAccount,DefaultStorageClass,ResourceQuota
+            - --authorization-mode=RBAC
+            - --tls-cert-file=/etc/kubernetes/ssl/apiserver.pem
+            - --tls-private-key-file=/etc/kubernetes/ssl/apiserver.key
+            - --client-ca-file=/etc/kubernetes/ssl/ca.pem
+            - --service-account-key-file=/etc/kubernetes/ssl/ca.pem
+            - --basic-auth-file=/etc/kubernetes/ssl/admin.csv
+            - --anonymous-auth=false
+            - --apiserver-count={{ groups['kube-master'] | length }}
+            - --runtime-config=extensions/v1beta1=true,extensions/v1beta1/networkpolicies=true,rbac.authorization.k8s.io/v1beta1=true
+            ports:
+            - containerPort: 65535
+              hostPort: 65535
+              name: https
+            volumeMounts:
+            - mountPath: /etc/kubernetes/ssl
+              name: ssl-certs-kubernetes
+              readOnly: true
+            - mountPath: /etc/ssl/certs
+              name: ssl-certs-host
+              readOnly: true
+          volumes:
+          - hostPath:
+              path: /etc/kubernetes/ssl
+            name: ssl-certs-kubernetes
+          - hostPath:
+              path: /usr/share/ca-certificates
+            name: ssl-certs-host
+  - filesystem: "root"
+    path:       "/etc/kubernetes/manifests/kube-apiserver-load-balance.yaml"
+    mode:       0644
+    contents:
+      inline: |
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kube-apiserver-load-balance
+          namespace: kube-system
+        spec:
+          hostNetwork: true
+          containers:
+          - name: kube-apiserver-load-balance
+            image: {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['HAPROXY'] }}
+            ports:
+            - containerPort: {{ K8S_PORT }}
+              hostPort: {{ K8S_PORT }}
+            volumeMounts: 
+            - mountPath: /usr/local/etc/haproxy/haproxy.cfg
+              name: haproxy-config
+              readOnly: true
+          volumes:
+          - hostPath:
+              path: /etc/kubernetes/config/haproxy.cfg
+            name: haproxy-config
+  - filesystem: "root"
+    path:       "/etc/kubernetes/manifests/kube-controller-manager.yaml"
+    mode:       0644
+    contents:
+      inline: |
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kube-controller-manager
+          namespace: kube-system
+        spec:
+          hostNetwork: true
+          containers:
+          - name: kube-controller-manager
+            image: {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KUBELET'] }}
+            command:
+            - /hyperkube
+            - controller-manager
+            - --master=https://{{ APISERVER_KEEPALIVED['IP'] }}:{{ K8S_PORT }}
+            - --allocate-node-cidrs=true
+            - --service-cluster-ip-range={{ SERVICE_IP_RANGE }}
+            - --cluster-cidr={{ POD_NETWORK }}
+            - --cluster-name=kubernetes
+            - --leader-elect=true
+            - --service-account-private-key-file=/etc/kubernetes/ssl/ca.key
+            - --root-ca-file=/etc/kubernetes/ssl/ca.pem
+            - --kubeconfig=/etc/kubernetes/config/kubeconfig.yaml
+            resources:
+              requests:
+                cpu: 200m
+            livenessProbe:
+              httpGet:
+                host: 127.0.0.1
+                path: /healthz
+                port: 10252
+              initialDelaySeconds: 15
+              timeoutSeconds: 15
+            volumeMounts:
+            - mountPath: /etc/kubernetes/ssl
+              name: ssl-certs-kubernetes
+              readOnly: true
+            - name: kubeconf
+              mountPath: /etc/kubernetes/config/kubeconfig.yaml
+              readOnly: true
+          volumes:
+          - hostPath:
+              path: /etc/kubernetes/ssl
+            name: ssl-certs-kubernetes
+          - name: kubeconf
+            hostPath:
+              path: /etc/kubernetes/config/kubeconfig.yaml
+  - filesystem: "root"
+    path:       "/etc/kubernetes/manifests/kube-scheduler.yaml"
+    mode:       0644
+    contents:
+      inline: |
+        apiVersion: v1
+        kind: Pod
+        metadata:
+          name: kube-scheduler
+          namespace: kube-system
+        spec:
+          hostNetwork: true
+          containers:
+          - name: kube-scheduler
+            image: {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KUBELET'] }}
+            command:
+            - /hyperkube
+            - scheduler
+            - --master=https://{{ APISERVER_KEEPALIVED['IP'] }}:{{ K8S_PORT }}
+            - --leader-elect=true
+            - --kubeconfig=/etc/kubernetes/config/kubeconfig.yaml
+            resources:
+              requests:
+                cpu: 100m
+            livenessProbe:
+              httpGet:
+                host: 127.0.0.1
+                path: /healthz
+                port: 10251
+              initialDelaySeconds: 15
+              timeoutSeconds: 15
+            volumeMounts:
+            - mountPath: /etc/kubernetes/ssl
+              name: ssl-certs-kubernetes
+              readOnly: true
+            - name: kubeconf
+              mountPath: /etc/kubernetes/config/kubeconfig.yaml
+              readOnly: true
+          volumes:
+          - hostPath:
+              path: /etc/kubernetes/ssl
+            name: ssl-certs-kubernetes
+          - name: kubeconf
+            hostPath:
+              path: /etc/kubernetes/config/kubeconfig.yaml
+  - filesystem: "root"
+    path:       "/etc/kubernetes/ssl/admin.csv"
+    mode:       0644
+    contents:
+      inline: |
+        {{ kube_users.pass }},{{ kube_users.role }},{{ kube_users.group }}
+  - filesystem: "root"
+    path:       "/etc/kubernetes/ssl/ca.key"
+    mode:       0644
+    contents:
+      inline: |
+        -----BEGIN RSA PRIVATE KEY-----
+        MIIEpAIBAAKCAQEAn8FT4m5rn+1Ll4aIX1us4dFKlyuIxNJbyKbR78Fm6Ealhy+k
+        QDoRd8DiqTLIrG7qRIfx7E8OID5oShfbR0dNELJ+Kx9WkAw0PNsDrlVk8r/m0TC9
+        bhRaXghLCr5SG+PGis4b4jVV6UfNqeNxekIoOlcKEQdWDz1LeA2AgVHy8KnV3hYM
+        tGjMGuCdB/KXq3DJsobPzw4YpoT7JO15m7ouj+i1Poy0CVnH5APqj7h32Rmd/RK0
+        VWouvwTi1U1DUUxn8eu/Lb5eZPn8Ti/pciOSAVFOLsmPSlqJj2QEmEwQ+jr2SYNK
+        vAKyoM+S3L2ED8Vm5+SM0EmuKcw9avbkgrcopQIDAQABAoIBAQCPSLqP8DGfcxnF
+        geh2fqcEss6P33//6BxiTx0kSPafhh2YrmZHJM3d9qZU0zOhVKnRZYzaQd2Nleu7
+        6MHHoG/CdhUrYCQndoqzukwG5JhyESRYo7qDLMYQaKfFrwW99gFxJYNk1CmF3dzc
+        bx6sZQHnsYFZ3JaXfIZf2txTIMkgiAh26am2jDa2bVWCMqgan44vzdA1S6v0K8Z3
+        H6NWaTC+gdg1S1qZh17NEhpqDtFecmBMrQubVIMQb9wr6G6I2z9EeVTgQGFEBwJC
+        d9qHcERgYsiwBjl7Qr0mpbSNv8y+BJXDTBWb+UiJQ1e2TJlSADErqyqzqC0gcKjI
+        4Myzg7DRAoGBAM1X49OOf687JG66SIj0gMDnYm1qit4mhTgYp2UQQs8Dj1FEZYs9
+        eou9YizvV6Qz1K2zLqt7wc+/fuAKGjSR+Du0TAq2WXEcM7GfMRN0D4Ztr0knEALl
+        pKRpmX4+wI2832j9Thw/IQuaUL/Zx8r6hAckjdd7aK1rnLPYvCGTBxHzAoGBAMcq
+        ZXAcLmzOk0bi5BORx8VpjN/y6VgmqnmkH1w9gWlOJTQA92i+n6E+DxgKSrjdOe8g
+        JPp58mHMfCXl2cy76BNdahPbNeJFwnL9NL/NJfRncJMRYXY6QT428DE3XRexTif+
+        5zgamPzY1fWVusFCcEZUQvpA9E1FLCKOBjIdc2kHAoGBALVeJLduDG8coMBAPuLg
+        enxnorMbwI4Ynd//PpLwOuIXtdVEwR+r7HpSis0/lTxOH1JQii8ifvvcmtaNdbnr
+        F8K8K9HmX7ec/jercLBK+Y91f7XwD59PcA1bzBwKlw5ZvUZBPWWLiMdzxFC/rU0l
+        2clpSvMBaGKMQvtCumA5OaxrAoGAfa+loCBIs+WRT7Szlh3zYgOAIXvcAgM0pdsK
+        51zxJBFqrOzHNVTGzCyrvdIQ4aTKgLtaWq9GZK100z3AOtGCXWYgITO/R3IaihJ8
+        jWXbQ+dbRZQ8Wy3cKnTlE0oK936vAdJ8/Azc6wOz0m2RE5Dn5ZobQm5nPbQfbBcQ
+        leO8B1UCgYB7EHU+KhVDwlrtw6MUiZGWNBJXyUEYtF1MyqU0dt11g1h0GelU3K2j
+        PTlZlUlVj4Rsz6CUMLajgTAsyuPLpQR7ED10moSIhz/rBOyUogV8TNYWyv4hsBCS
+        kaM4DdS3rkkrhe7fr7nPDpaOItvG0SIBjloLb3WEAyBxlJqg7Bc+yQ==
+        -----END RSA PRIVATE KEY-----
+  - filesystem: "root"
+    path:       "/etc/kubernetes/ssl/ca.pem"
+    mode:       0644
+    contents:
+      inline:  |
+        -----BEGIN CERTIFICATE-----
+        MIIC+TCCAeGgAwIBAgIJAIiJ7xE2i2VpMA0GCSqGSIb3DQEBCwUAMBIxEDAOBgNV
+        BAMMB2t1YmUtY2EwIBcNMTgwMjEyMDMyNDI4WhgPMjExODAxMTkwMzI0MjhaMBIx
+        EDAOBgNVBAMMB2t1YmUtY2EwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIB
+        AQCfwVPibmuf7UuXhohfW6zh0UqXK4jE0lvIptHvwWboRqWHL6RAOhF3wOKpMsis
+        bupEh/HsTw4gPmhKF9tHR00Qsn4rH1aQDDQ82wOuVWTyv+bRML1uFFpeCEsKvlIb
+        48aKzhviNVXpR82p43F6Qig6VwoRB1YPPUt4DYCBUfLwqdXeFgy0aMwa4J0H8per
+        cMmyhs/PDhimhPsk7Xmbui6P6LU+jLQJWcfkA+qPuHfZGZ39ErRVai6/BOLVTUNR
+        TGfx678tvl5k+fxOL+lyI5IBUU4uyY9KWomPZASYTBD6OvZJg0q8ArKgz5LcvYQP
+        xWbn5IzQSa4pzD1q9uSCtyilAgMBAAGjUDBOMB0GA1UdDgQWBBQCiBVVP64HD+Nq
+        Zh2S5rqQwIaB5TAfBgNVHSMEGDAWgBQCiBVVP64HD+NqZh2S5rqQwIaB5TAMBgNV
+        HRMEBTADAQH/MA0GCSqGSIb3DQEBCwUAA4IBAQCNVq64HWdmQPadU0I2nGPEhtxE
+        c8g97GaygcOE30spmEp9QBq3TEJz+wdRvHol8UKNYgx0Jxp4UZctC4JrPLPvgdzH
+        ns4ZS65Tk4jb0Ub6wBo4KVKrUjn/7IZCfHqpDLwYAffpsAJ4SrWPLjNUXZOrDlQW
+        rXD93O58GRKA88o196a1hZ604+Mf9mjzkdayllu+MUjO/gaO0BRUf29lmUsB0jat
+        0ESeJpZqsrLCYYm2XZKEAYI8/7VJW5Kej5xyfpS9zkzkP84qscjT0pfZLYqNsnwM
+        SGSxpKhICBFal3aFHm+c04JwRLYZJMkzLcYuxZxqJ33SBKo7haNUgWIQJqYN
+        -----END CERTIFICATE-----
+  - filesystem: "root"
+    path:       "/etc/kubernetes/ssl/openssl-apiserver.cnf"
+    mode:       0644
+    contents:
+      inline: |
+        [req]
+        req_extensions = v3_req
+        distinguished_name = req_distinguished_name
+        [req_distinguished_name]
+        [ v3_req ]
+        basicConstraints = CA:FALSE
+        keyUsage = nonRepudiation, digitalSignature, keyEncipherment
+        subjectAltName = @alt_names
+        [alt_names]
+        DNS.1 = kubernetes
+        DNS.2 = kubernetes.default
+        DNS.3 = kubernetes.default.svc
+        DNS.4 = kubernetes.default.svc.cluster.local
+        DNS.5 = *.{{ MASTER_DOMAIN }}
+        DNS.6 = {{ MASTER_DOMAIN }}
+        IP.1 = {{ K8S_SERVICE_IP }}
+        IP.2 = 127.0.0.1
+        IP.3 = {{ APISERVER_KEEPALIVED['IP'] }}
+        IP.4 = {{ ansible_ssh_host }}
+  - filesystem: "root"
+    path:       "/etc/kubernetes/scripts/kubelet-ssl.sh"
+    mode:       0755
+    contents:
+      inline: |
+        #!/bin/bash
+        set -e
+        cd /etc/kubernetes/ssl
+        if [[ -e /etc/kubernetes/ssl/apiserver.key ]]; then
+          echo 'apiserver.key is ready!'
+        else
+          openssl genrsa -out apiserver.key 2048
+          echo 'apiserver.key is ready!'
+        fi
+        if [[ -e /etc/kubernetes/ssl/apiserver.pem ]]; then
+          echo 'apiserver.pem is ready!'
+        else
+          openssl req -new -key apiserver.key -out apiserver.csr -subj "/CN=admin/C=CN/ST=BeiJing/L=Beijing/O=system:masters/OU=System" -config openssl-apiserver.cnf
+          openssl x509 -req -in apiserver.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out apiserver.pem -days 36500 -extensions v3_req -extfile openssl-apiserver.cnf
+          echo 'apiserver.pem is ready!'
+        fi
+        if [[ -e /etc/kubernetes/ssl/kubelet.key ]]; then
+          echo 'kubelet.key is ready!'
+        else
+          openssl genrsa -out kubelet.key 2048
+          echo 'kubelet.key is ready!'
+        fi
+        if [[ -e /etc/kubernetes/ssl/kubelet.pem ]]; then
+          echo 'kubelet.pem is ready!'
+        else
+          openssl req -new -key kubelet.key -out admin.csr -subj "/CN=admin/C=CN/ST=BeiJing/L=Beijing/O=system:masters/OU=System"
+          openssl x509 -req -in admin.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out kubelet.pem -days 36500 -extensions v3_req
+          echo 'kubelet.pem is ready!'
+        fi
+  {% if HTTP_PROXY.strip() %}  
+  - filesystem: "root"
+    path:       "/etc/systemd/system/update-engine.service.d/proxy.conf"
+    mode:       0755
+    contents:
+      inline: |
+        [Service]
+        Environment=ALL_PROXY={{ HTTP_PROXY }}
+  {% endif %}  
+networkd:
+  units:
+  - name: 00-static.network
+    contents: |
+      [Match]
+      Name={{ NETWORK }}
+      [Network]
+      BOOTPROTO=none
+      DNS={{ DNS }}
+      Address={{ ansible_ssh_host }}/{{ NETMASK }}
+      Gateway={{ GATEWAY }}
+      DHCP=no
+systemd:
+  units:
+  - name: "settimezone.service"
+    enable: true
+    contents: |
+      [Unit]
+      Description=time zone Asia/Shanghai
+      [Service]
+      ExecStart=/usr/bin/timedatectl set-timezone Asia/Shanghai
+      RemainAfterExit=yes
+      Type=oneshot
+      [Install]
+      WantedBy=multi-user.target
+  - name: "rkt-prepare.service"
+    enable: true
+    contents: |
+      [Unit]
+      Description=download etcd flannel kubelet aci (HTTP)
+      Wants=network.target
+      [Service]
+      Restart=on-failure
+      RestartSec=10
+      TimeoutStartSec=0
+      Environment=PATH=/bin:/opt/bin:/usr/bin:/usr/sbin:/sbin:$PATH
+      Environment=HTTP_SERVER={{ HTTP_SERVER }}
+      ExecStart=/etc/kubernetes/scripts/rkt-prepare.sh
+      [Install]
+      WantedBy=multi-user.target
+  - name: "etcd2.service"
+    enable: false
+  - name: "etcd-member.service"
+    enable: false
+  - name: "etcd3.service"
+    enable: true
+    contents: |
+      [Unit]
+      Description=etcd (System Application Container)
+      Documentation=https://github.com/coreos/etcd
+      Requires=rkt-prepare.service
+      After=rkt-prepare.service
+      Conflicts=etcd.service
+      Conflicts=etcd2.service
+      Conflicts=etcd-member.service
+      [Service]
+      Type=notify
+      Restart=always
+      RestartSec=10s
+      TimeoutStartSec=0
+      LimitNOFILE=40000
+      ExecStartPre=/usr/bin/mkdir --parents /var/lib/coreos
+      ExecStartPre=-/usr/bin/rkt rm --uuid-file=/var/lib/coreos/etcd3-pod.uuid
+      Environment="ETCD_IMAGE=/etc/kubernetes/downloads/etcd.aci"
+      Environment="ETCD_USER=etcd"
+      Environment="ETCD_DATA_DIR=/var/lib/etcd"
+      Environment="RKT_GLOBAL_ARGS=--insecure-options=image"
+      Environment="RKT_RUN_ARGS=--uuid-file-save=/var/lib/coreos/etcd3-pod.uuid --volume data-dir,kind=host,source=/var/lib/etcd,readOnly=false"
+      Environment="ETCD_IMAGE_ARGS=--name=etcd"
+      ExecStart=/usr/lib/coreos/etcd-wrapper \
+        --name={{ inventory_hostname }} \
+        --initial-cluster-token=spacesystech.com \
+        --initial-cluster={% for host in groups.etcd %}{{ host }}=http://{{ hostvars[host]['ansible_ssh_host'] }}:2380{% if not loop.last %},{% endif %}{% endfor %} \
+        --initial-cluster-state=new \
+        --advertise-client-urls=http://{{ ansible_ssh_host }}:2379 \
+        --initial-advertise-peer-urls=http://{{ ansible_ssh_host }}:2380 \
+        --listen-client-urls=http://{{ ansible_ssh_host }}:2379,http://127.0.0.1:2379 \
+        --listen-peer-urls=http://{{ ansible_ssh_host }}:2380
+      ExecStop=-/usr/bin/rkt stop --uuid-file=/var/lib/coreos/etcd3-pod.uuid
+      [Install]
+      WantedBy=multi-user.target
+  - name: "flannel-docker-opts.service"
+    enable: true
+    dropins:
+      - name: 10-image.conf
+        contents: |
+          [Unit]
+          After=etcd3.service
+          [Service]
+          Environment="FLANNEL_IMAGE=/etc/kubernetes/downloads/flannel.aci"
+          Environment="RKT_GLOBAL_ARGS=--insecure-options=image"
+          Environment="FLANNEL_IMAGE_ARGS=--name=flannelopts --exec=/opt/bin/mk-docker-opts.sh"
+  - name: "flanneld.service"
+    enable: true
+    dropins:
+      - name: 10-image.conf
+        contents: |
+          [Unit]
+          After=etcd3.service
+          [Service]
+          ExecStartPre=/sbin/modprobe ip_vs
+          ExecStartPre=/sbin/modprobe ip_vs_rr
+          ExecStartPre=/etc/kubernetes/downloads/etcdctl --endpoints={% for host in groups.etcd %}http://{{ hostvars[host]['ansible_ssh_host'] }}:2379{% if not loop.last %},{% endif %}{% endfor %} set /spacesystech.com/network/config '{ "Network": "{{ POD_NETWORK }}","Backend": {"Type":"vxlan"} }'
+          Environment="FLANNELD_IFACE={{ ansible_ssh_host }}"
+          Environment="FLANNELD_ETCD_ENDPOINTS={% for host in groups.etcd %}http://{{ hostvars[host]['ansible_ssh_host'] }}:2379{% if not loop.last %},{% endif %}{% endfor %}"
+          Environment="FLANNELD_ETCD_PREFIX=/spacesystech.com/network"
+          Environment="FLANNEL_IMAGE=/etc/kubernetes/downloads/flannel.aci"
+          Environment="RKT_GLOBAL_ARGS=--insecure-options=image"
+          Environment="FLANNEL_IMAGE_ARGS=--name=flannel"
+          Restart=always
+          RestartSec=10s
+  - name: "docker.service"
+    enable: true
+    dropins:
+      - name: 10-flannel.conf
+        contents: |
+          [Unit]
+          Requires=flanneld.service
+          After=flanneld.service
+          [Service]
+          Environment=DOCKER_OPT_BIP=""
+          Environment=DOCKER_OPT_IPMASQ=""
+      {% if REGISTRY_SCHEME=='http' %} 
+      - name: 20-insecure-registry.conf
+        contents: |
+          [Service]
+          Environment=DOCKER_OPTS='--insecure-registry="{{ REGISTRY_SOURCE }}"'
+      {% endif %}
+      {% if HTTP_PROXY.strip() %} 
+      - name: 30-proxy.conf
+        contents: |
+          [Service]
+          Environment="HTTP_PROXY={{ HTTP_PROXY }}"
+      {% endif %} 
+  - name: "keepalived.service"
+    enable: true
+    contents: |
+      [Unit]
+      Description=keepalived
+      After=docker.service
+      [Service]
+      User=root
+      PermissionsStartOnly=true
+      ExecStartPre=-/usr/bin/docker rm -f keepalived
+      ExecStart=/usr/bin/docker run --name keepalived --volume /etc/kubernetes/config/keepalived.conf:/container/service/keepalived/assets/keepalived.conf --cap-add=NET_ADMIN --net=host --detach --restart always {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KEEPALIVED'] }} --copy-service
+      [Install]
+      WantedBy=multi-user.target
+  - name: "kubelet.service"
+    enable: true
+    contents: |
+      [Unit]
+      Description=kubelet
+      Documentation=https://kubernetes.io
+      After=docker.service
+      [Service]
+      Environment=PATH=/opt/bin/:/usr/bin/:/usr/sbin:$PATH
+      Environment=KUBELET_IMAGE=/etc/kubernetes/downloads/hyperkube.aci
+      Environment="RKT_GLOBAL_ARGS=--insecure-options=image"
+      Environment="RKT_RUN_ARGS=--volume modprobe,kind=host,source=/usr/sbin/modprobe \
+        --mount volume=modprobe,target=/usr/sbin/modprobe \
+        --volume lib-modules,kind=host,source=/lib/modules \
+        --mount volume=lib-modules,target=/lib/modules \
+        --uuid-file-save=/var/run/kubelet-pod.uuid \
+        --volume var-log,kind=host,source=/var/log \
+        --mount volume=var-log,target=/var/log \
+        --volume dns,kind=host,source=/etc/resolv.conf \
+        --mount volume=dns,target=/etc/resolv.conf \
+        --volume coreos-etc-cni-net,kind=host,source=/etc/kubernetes/cni,readOnly=true \
+        --mount volume=coreos-etc-cni-net,target=/etc/cni/net.d"
+      ExecStartPre=-/usr/bin/docker rm `/usr/bin/docker ps -a|grep Exited|awk '{print $1}'`
+      ExecStartPre=-/usr/bin/rkt rm `/usr/bin/rkt list|grep 'exited'|awk '{print $1}'`
+      ExecStartPre=/etc/kubernetes/scripts/kubelet-ssl.sh
+      ExecStartPre=/usr/bin/mkdir -p /etc/kubernetes/manifests
+      ExecStartPre=/usr/bin/mkdir -p /var/log/containers
+      ExecStartPre=-/usr/bin/rkt rm --uuid-file=/var/run/kubelet-pod.uuid
+      ExecStart=/usr/lib/coreos/kubelet-wrapper \
+        --kubeconfig=/etc/kubernetes/config/kubeconfig.yaml \
+        --register-node=true \
+        --allow-privileged=true \
+        --pod-manifest-path=/etc/kubernetes/manifests \
+        --hostname-override={{ inventory_hostname }} \
+        --node-labels="role=master" \
+        --cluster-dns={{ DNS_SERVICE_IP }} \
+        --cluster-domain=cluster.local \
+        --hairpin-mode promiscuous-bridge \
+        --network-plugin=cni \
+        --cni-conf-dir=/etc/cni/net.d \
+        --cni-bin-dir=/opt/cni/bin \
+        --fail-swap-on=false \
+        --eviction-hard=memory.available<1Gi \
+        --eviction-hard=nodefs.available<5Gi \
+        --eviction-hard=imagefs.available<5Gi \
+        --pod-infra-container-image={{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['PAUSE'] }}
+      ExecStop=-/usr/bin/rkt stop --uuid-file=/var/run/kubelet-pod.uuid
+      Restart=always
+      RestartSec=10
+      [Install]
+      WantedBy=multi-user.target
+  - name: "loopback_gluster.service"
+    enable: true
+    contents: |
+      [Unit]
+      Description=Create the loopback device for GlusterFS
+      [Service]
+      User=root
+      PermissionsStartOnly=true
+      ExecStartPre=/sbin/modprobe dm_snapshot
+      ExecStartPre=/sbin/modprobe dm_mirror
+      ExecStartPre=/sbin/modprobe dm_thin_pool
+      ExecStart=-/usr/bin/bash -c "[ -b /dev/loop0 ] || /sbin/losetup /dev/loop0 /home/core/glusterimage"
+      [Install]
+      WantedBy=multi-user.target

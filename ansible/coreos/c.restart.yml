@@ -1,0 +1,5 @@
+- hosts: all
+  tasks:
+  - name: reboot
+    raw: reboot
+    ignore_errors: True

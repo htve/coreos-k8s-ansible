@@ -1,0 +1,23 @@
+[all]
+master01 ansible_ssh_host=192.168.2.111 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
+master02 ansible_ssh_host=192.168.2.112 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
+master03 ansible_ssh_host=192.168.2.113 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
+worker01 ansible_ssh_host=192.168.2.121 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
+worker02 ansible_ssh_host=192.168.2.122 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
+
+[kube-master]
+master01
+master02
+master03
+
+[kube-worker]
+worker01
+worker02
+
+[etcd]
+master01
+master02
+master03
+
+[addon]
+master01

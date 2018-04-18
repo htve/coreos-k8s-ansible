@@ -1,0 +1,39 @@
+{
+  "ignition": {
+    "config": {},
+    "timeouts": {},
+    "version": "2.1.0"
+  },
+  "networkd": {
+    "units": [
+      {
+        "contents": "[Match]\nName={{ NETWORK }}\n\n[Network]\nDNS={{ DNS }}\nAddress={{ ansible_ssh_host }}/{{ NETMASK }}\nGateway={{ GATEWAY }}\nDHCP=no\nLinkLocalAddressing=no\n",
+        "name": "00-static.network"
+      }
+    ]
+  },
+  "passwd": {
+    "users": [
+      {
+        "name": "root",
+        "passwordHash": "{{ ROOT_PWD }}"
+      }
+    ]
+  },
+  "storage": {
+    "files": [
+      {
+        "filesystem": "root",
+        "group": {},
+        "path": "/etc/ssh/sshd_config",
+        "user": {},
+        "contents": {
+          "source": "data:,%23%20Use%20most%20defaults%20for%20sshd%20configuration.%0ASubsystem%20sftp%20internal-sftp%0AClientAliveInterval%20180%0AUseDNS%20no%0AUsePAM%20yes%0APermitRootLogin%20yes%0APrintLastLog%20no%20%23%20handled%20by%20PAM%0APrintMotd%20no%20%23%20handled%20by%20PAM",
+          "verification": {}
+        },
+        "mode": 384
+      }
+    ]
+  },
+  "systemd": {}
+}

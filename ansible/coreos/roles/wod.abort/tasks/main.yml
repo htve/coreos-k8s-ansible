@@ -1,0 +1,31 @@
+- name: Stop systemd
+  raw: systemctl stop kubelet
+
+- name: Abort docker
+  raw: docker rm -f `docker ps -a|awk '{print $1}'`
+  ignore_errors: True
+
+- name: Clear Docker Images
+  raw: docker rmi $(docker images -q)
+  ignore_errors: True
+
+- name: Abort Filesystem
+  raw: rm -rf /etc/rkt && rm -rf /etc/kubernetes && rm -rf /usr/share/oem/coreos-install.*
+
+- name: Abort Systemd
+  raw: rm -rf /etc/systemd/system/*.* && systemctl stop docker && systemctl daemon-reload
+
+- name: Stop rkt list
+  raw: rkt stop `rkt list|awk '{print $1}'`
+  ignore_errors: True
+
+- name: Clear rkt list
+  raw: rkt rm `rkt list|awk '{print $1}'`
+  ignore_errors: True
+  
+- name: Clear rkt image list
+  raw: rkt image rm `rkt image list|awk '{print $1}'`
+  ignore_errors: True
+  
+- name: template minimal.json to /usr/share/oem/coreos-install.json
+  template: src=minimal.json dest=/usr/share/oem/coreos-install.json

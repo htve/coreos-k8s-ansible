@@ -1,0 +1,19 @@
+---
+# Users to create for basic auth in Kubernetes API via HTTP
+kube_users:
+  pass: abc2018
+  role: admin
+  group: admin
+
+# Group name
+GROUP_NAME: masters
+
+# keepalived
+KEEPALIVED: {
+  INTERFACE: "eth0",
+  PASSWORD: "FKUXbcsagM",
+  NETMASK: "21",
+  VIRTUAL_IPS: {
+	"192.168.2.118" 
+  }
+}

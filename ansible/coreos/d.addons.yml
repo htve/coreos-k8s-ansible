@@ -1,0 +1,3 @@
+- hosts: addon
+  roles:
+  - wod.k8s-addon

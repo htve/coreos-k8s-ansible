@@ -269,15 +269,6 @@ storage:
           openssl x509 -req -in kubelet.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out kubelet.pem -days 365 -extensions v3_req -extfile openssl-apiserver.cnf
           echo 'kubelet.pem is ready!'
         fi
-  {% if HTTP_PROXY.strip() %} 
-  - filesystem: "root"
-    path:       "/etc/systemd/system/update-engine.service.d/proxy.conf"
-    mode:       0755
-    contents:
-      inline: |
-        [Service]
-        Environment=ALL_PROXY={{ HTTP_PROXY }}
-  {% endif %} 
 networkd:
   units:
   - name: 00-static.network
@@ -371,12 +362,6 @@ systemd:
         contents: |
           [Service]
           Environment=DOCKER_OPTS='--insecure-registry="{{ REGISTRY_SOURCE }}"'
-      {% endif %}
-      {% if HTTP_PROXY.strip() %}
-      - name: 30-http-proxy.conf
-        contents: |
-          [Service]
-          Environment="HTTP_PROXY={{ HTTP_PROXY }}"
       {% endif %} 
   - name: "kubelet.service"
     enable: true

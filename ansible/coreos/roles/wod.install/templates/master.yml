@@ -107,48 +107,6 @@ storage:
           {% for host in groups["kube-master"] %}server apiserver{{ loop.index }} {{ hostvars[host]['ansible_ssh_host'] }}:65535 check inter 2000 rise 2 fall 3
           {% endfor %} 
   - filesystem: "root"
-    path:       "/etc/kubernetes/config/keepalived.conf"
-    mode:       0644
-    contents:
-      inline: |
-        vrrp_instance vi_kube_apiserver {
-          interface {{ NETWORK }}
-          track_interface {
-        	{{ NETWORK }}
-          }
-          state BACKUP
-          virtual_router_id {{ 100 | random }}
-          priority {{ 254 | random }}
-          nopreempt
-          virtual_ipaddress {
-        	{{ APISERVER_KEEPALIVED["IP"] }}/{{ NETMASK }}
-          }
-          authentication {
-        	auth_type PASS
-        	auth_pass {{ APISERVER_KEEPALIVED["PASSWORD"] }}
-          }
-        }
-        {% if KEEPALIVED and KEEPALIVED['INTERFACE'].strip() and KEEPALIVED['PASSWORD'].strip() and KEEPALIVED['VIRTUAL_IPS'] %} 
-        vrrp_instance vi_master {
-          interface {{ KEEPALIVED["INTERFACE"] }}
-          track_interface {
-        	{{ KEEPALIVED["INTERFACE"] }}
-          }
-          state BACKUP
-          virtual_router_id {{ 100 | random }}
-          priority {{ 254 | random }}
-          nopreempt
-          virtual_ipaddress {
-        	{% for ips in KEEPALIVED["VIRTUAL_IPS"] %}{{ ips }}/{{ KEEPALIVED["NETMASK"] }}
-            {% endfor %} 
-          }
-          authentication {
-        	auth_type PASS
-        	auth_pass {{ KEEPALIVED["PASSWORD"] }}
-          }
-        }
-        {% endif %} 
-  - filesystem: "root"
     path:       "/etc/kubernetes/config/kubeconfig.yaml"
     mode:       0644
     contents:
@@ -533,15 +491,77 @@ storage:
           openssl x509 -req -in admin.csr -CA ca.pem -CAkey ca.key -CAcreateserial -out kubelet.pem -days 36500 -extensions v3_req
           echo 'kubelet.pem is ready!'
         fi
-  {% if HTTP_PROXY.strip() %}  
   - filesystem: "root"
-    path:       "/etc/systemd/system/update-engine.service.d/proxy.conf"
-    mode:       0755
+    path:       "/etc/kubernetes/keepalived/internet.conf"
+    mode:       0644
     contents:
       inline: |
-        [Service]
-        Environment=ALL_PROXY={{ HTTP_PROXY }}
-  {% endif %}  
+        global_defs {
+          default_interface {{ KEEPALIVED['INTERFACE'] }}
+        }
+        vrrp_instance VI_1 {
+          interface {{ KEEPALIVED['INTERFACE'] }}
+          track_interface {
+            {{ KEEPALIVED['INTERFACE'] }}
+          }
+          state BACKUP
+          virtual_router_id 51
+          priority {{ 200 | random }}
+          nopreempt
+          unicast_src_ip {{ ansible_ssh_host }}
+          unicast_peer {
+            {% for host in groups["kube-master"] %}  
+            {% if not hostvars[host]['ansible_ssh_host'] == ansible_ssh_host %}{{ hostvars[host]['ansible_ssh_host'] }}/{{ NETMASK }}{% endif %}
+            {% endfor %}  
+          }
+          virtual_ipaddress {
+            {% for host in KEEPALIVED['VIRTUAL_IPS'] %}{{ host }}
+            {% endfor %}  
+          }
+          virtual_routes {
+            default via {{ KEEPALIVED['ROUTER'] }}
+          }
+          authentication {
+            auth_type PASS
+            auth_pass {{ KEEPALIVED['PASSWORD'] }}
+          }
+          notify "/container/service/keepalived/assets/notify.sh"
+        }
+  - filesystem: "root"
+    path:       "/etc/kubernetes/keepalived/kube-apiserver.conf"
+    mode:       0644
+    contents:
+      inline: |
+        global_defs {
+          default_interface {{ NETWORK }}
+        }
+        vrrp_instance VI_1 {
+          interface {{ NETWORK }}
+          track_interface {
+            {{ NETWORK }}
+          }
+          state BACKUP
+          virtual_router_id 52
+          priority {{ 200 | random }}
+          nopreempt
+          unicast_src_ip {{ ansible_ssh_host }}
+          unicast_peer {
+            {% for host in groups["kube-master"] %}  
+            {% if not hostvars[host]['ansible_ssh_host'] == ansible_ssh_host %}{{ hostvars[host]['ansible_ssh_host'] }}/{{ NETMASK }}{% endif %}
+            {% endfor %}  
+          }
+          virtual_ipaddress {
+            {{ APISERVER_KEEPALIVED['IP'] }}/{{ NETMASK }}
+          }
+          virtual_routes {
+            default via {{ GATEWAY }}
+          }
+          authentication {
+            auth_type PASS
+            auth_pass {{ APISERVER_KEEPALIVED['PASSWORD'] }}
+          }
+          notify "/container/service/keepalived/assets/notify.sh"
+        }
 networkd:
   units:
   - name: 00-static.network
@@ -553,7 +573,6 @@ networkd:
       DNS={{ DNS }}
       Address={{ ansible_ssh_host }}/{{ NETMASK }}
       Gateway={{ GATEWAY }}
-      DHCP=no
 systemd:
   units:
   - name: "settimezone.service"
@@ -670,12 +689,7 @@ systemd:
           [Service]
           Environment=DOCKER_OPTS='--insecure-registry="{{ REGISTRY_SOURCE }}"'
       {% endif %}
-      {% if HTTP_PROXY.strip() %} 
-      - name: 30-proxy.conf
-        contents: |
-          [Service]
-          Environment="HTTP_PROXY={{ HTTP_PROXY }}"
-      {% endif %} 
+  {% if KEEPALIVED and KEEPALIVED['INTERFACE'].strip() and KEEPALIVED['PASSWORD'].strip() and KEEPALIVED['VIRTUAL_IPS'] %}  
   - name: "keepalived.service"
     enable: true
     contents: |
@@ -686,9 +700,25 @@ systemd:
       User=root
       PermissionsStartOnly=true
       ExecStartPre=-/usr/bin/docker rm -f keepalived
-      ExecStart=/usr/bin/docker run --name keepalived --volume /etc/kubernetes/config/keepalived.conf:/container/service/keepalived/assets/keepalived.conf --cap-add=NET_ADMIN --net=host --detach --restart always {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KEEPALIVED'] }} --copy-service
+      ExecStart=/usr/bin/docker run --name keepalived --volume /etc/kubernetes/keepalived/internet.conf:/container/service/keepalived/assets/keepalived.conf --cap-add=NET_ADMIN --net=host --detach --restart always {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KEEPALIVED'] }} --copy-service
       [Install]
       WantedBy=multi-user.target
+  {% endif %}
+  {% if APISERVER_KEEPALIVED and APISERVER_KEEPALIVED['PASSWORD'].strip() and APISERVER_KEEPALIVED['IP'].strip() %}  
+  - name: "kube-apiserver-keepalived.service"
+    enable: true
+    contents: |
+      [Unit]
+      Description=kube-apiserver keepalived
+      After=docker.service
+      [Service]
+      User=root
+      PermissionsStartOnly=true
+      ExecStartPre=-/usr/bin/docker rm -f kube-apiserver-keepalived
+      ExecStart=/usr/bin/docker run --name kube-apiserver-keepalived --volume /etc/kubernetes/keepalived/kube-apiserver.conf:/container/service/keepalived/assets/keepalived.conf --cap-add=NET_ADMIN --net=host --detach --restart always {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['KEEPALIVED'] }} --copy-service
+      [Install]
+      WantedBy=multi-user.target
+  {% endif %} 
   - name: "kubelet.service"
     enable: true
     contents: |

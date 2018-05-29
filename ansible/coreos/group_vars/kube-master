@@ -12,8 +12,8 @@ GROUP_NAME: masters
 KEEPALIVED: {
   INTERFACE: "eth0",
   PASSWORD: "FKUXbcsagM",
-  NETMASK: "21",
+  ROUTER: "192.168.0.1",
   VIRTUAL_IPS: {
-	"192.168.2.118" 
+	"192.168.2.118/21"
   }
 }

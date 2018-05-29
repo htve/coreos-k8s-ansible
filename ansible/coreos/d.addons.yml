@@ -1,3 +1,4 @@
 - hosts: addon
+  gather_facts: False
   roles:
   - wod.k8s-addon

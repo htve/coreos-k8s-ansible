@@ -88,7 +88,6 @@ spec:
       containers:
       - name: coredns
         image: {{ REGISTRY_SOURCE_LOCAL }}{{ IMAGES['COREDNS'] }}
-        imagePullPolicy: IfNotPresent
         args: [ "-conf", "/etc/coredns/Corefile" ]
         volumeMounts:
         - name: config-volume

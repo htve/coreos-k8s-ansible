@@ -1,12 +1,12 @@
 
 #https://storage.googleapis.com/kubernetes-release/release/stable.txt
 
-ETCD_VER=v3.3.3
+ETCD_VER=v3.3.5
 CNI_VER=v0.7.1
-CT_VER=v0.7.0
+CT_VER=v0.9.0
 FLANNEL_VER=v0.10.0
-HYPERKUBE_VER=v1.10.1_coreos.0
-KEBECTL_VER=v1.10.1  
+HYPERKUBE_VER=v1.10.3_coreos.0
+KEBECTL_VER=v1.10.3  
 
 # etcd
 rkt fetch quay.io/coreos/etcd:${ETCD_VER}

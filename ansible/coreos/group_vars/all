@@ -32,24 +32,24 @@ HOSTS: {
 }
 
 IMAGES: {
-    "HAPROXY": "haproxy",
-    "KEEPALIVED": "keepalived",
-	"COREDNS": "coredns",
-	"HEAPSTER": "heapster-amd64",
-	"ADDON_RESIZER": "addon-resizer",
-	"INFLUXDB": "heapster-influxdb-amd64",
-	"GRAFANA": "heapster-grafana-amd64",
-	"BUSYBOX": "busybox",
-	"KUBE_ROUTER": "kube-router",
-	"KUBECTL": "kubectl",
-    "KUBELET": "hyperkube",
-    "PAUSE": "pause",
-	"DASHBOARD": "kubernetes-dashboard-amd64"
+    "HAPROXY": "haproxy:latest",
+    "KEEPALIVED": "keepalived:latest",
+	"COREDNS": "coredns:latest",
+	"HEAPSTER": "heapster-amd64:latest",
+	"ADDON_RESIZER": "addon-resizer:latest",
+	"INFLUXDB": "heapster-influxdb-amd64:latest",
+	"GRAFANA": "heapster-grafana-amd64:latest",
+	"BUSYBOX": "busybox:latest",
+	"KUBE_ROUTER": "kube-router:latest",
+	"KUBECTL": "kubectl:latest",
+    "KUBELET": "hyperkube:latest",
+    "PAUSE": "pause:latest",
+	"DASHBOARD": "kubernetes-dashboard-amd64:latest"
 }
 
 K8S_CNI_BIN: "cni-plugins-amd64-v0.7.1"
 PYPY_VERSION: 'v5.10.0'
-CT_VERSION: 'v0.7.0'
+CT_VERSION: 'v0.9.0'
 
 # k8s adv option.
 POD_NETWORK: 10.2.0.0/16

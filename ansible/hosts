@@ -1,9 +1,15 @@
 [all]
-master01 ansible_ssh_host=192.168.2.111 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
-master02 ansible_ssh_host=192.168.2.112 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
-master03 ansible_ssh_host=192.168.2.113 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
-worker01 ansible_ssh_host=192.168.2.121 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
-worker02 ansible_ssh_host=192.168.2.122 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass=123456 ansible_python_interpreter="/root/bin/python"
+master01 ansible_ssh_host=172.16.8.11 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+master02 ansible_ssh_host=172.16.8.12 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+master03 ansible_ssh_host=172.16.8.13 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker01 ansible_ssh_host=172.16.8.101 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker02 ansible_ssh_host=172.16.8.102 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker03 ansible_ssh_host=172.16.8.103 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker04 ansible_ssh_host=172.16.8.104 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker05 ansible_ssh_host=172.16.8.105 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker06 ansible_ssh_host=172.16.8.106 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker07 ansible_ssh_host=172.16.8.107 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
+worker08 ansible_ssh_host=172.16.8.108 ansible_ssh_port=22 ansible_ssh_user=root ansible_ssh_pass='lxE#0k9SsKhR^Ht@' ansible_python_interpreter="/root/bin/python"
 
 [kube-master]
 master01
@@ -13,6 +19,12 @@ master03
 [kube-worker]
 worker01
 worker02
+worker03
+worker04
+worker05
+worker06
+worker07
+worker08
 
 [etcd]
 master01

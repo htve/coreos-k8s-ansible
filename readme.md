@@ -53,7 +53,7 @@ coreos_production_image.bin.bz2
 coreos_production_image.bin.bz2.sig
 coreos_production_iso_image
 ```
-Download link: https://stable.release.core-os.net/amd64-usr/1688.5.3/
+Download link: https://stable.release.core-os.net/amd64-usr/current/
 
 # Install
 ## 1). install coreos to each node
